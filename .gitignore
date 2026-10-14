@@ -1,16 +1,17 @@
-# Compiled class file
+# ---------------------------------------------------------------- Gradle / Android
+build/
+.gradle/
+local.properties
+captures/
+.cxx/
+.externalNativeBuild/
+
+# 构建产物
+*.apk
+*.aab
+*.ap_
+*.dex
 *.class
-
-# Log file
-*.log
-
-# BlueJ files
-*.ctxt
-
-# Mobile Tools for Java (J2ME)
-.mtj.tmp/
-
-# Package Files #
 *.jar
 *.war
 *.nar
@@ -19,6 +20,25 @@
 *.tar.gz
 *.rar
 
-# virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
+# 签名文件（千万不要提交）
+*.jks
+*.keystore
+
+# ---------------------------------------------------------------- IDE
+.idea/
+*.iml
+*.iws
+*.ipr
+.vscode/
+out/
+gen/
+
+# ---------------------------------------------------------------- 系统 / 日志
+.DS_Store
+Thumbs.db
+*.log
 hs_err_pid*
 replay_pid*
+
+# LSPosed / Xposed 抓的日志
+日志/
