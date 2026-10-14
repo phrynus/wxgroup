@@ -11,17 +11,25 @@ android {
         applicationId = "com.example.wxgroup"
         minSdk = 28
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // R8：收缩 + 混淆。混淆会顺带把本模块的类名改掉，
+            // 宿主更难从类名认出这是哪个模块。
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            // 签名沿用本机 debug key：签名和已装上的 debug 包一致，
+            // 所以能直接覆盖升级，不丢设置、也不用去 LSPosed 里重新勾一次。
+            // 要换成自己的正式签名：换成自己的 signingConfigs，
+            // 但必须卸载重装（会清掉设置，LSPosed 里的启用状态也要重勾）。
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
 

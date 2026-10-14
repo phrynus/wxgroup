@@ -2,7 +2,6 @@ package com.example.wxgroup
 
 import android.app.Application
 import android.app.Instrumentation
-import android.util.Log
 import de.robv.android.xposed.IXposedHookLoadPackage
 import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedBridge
@@ -15,6 +14,9 @@ import java.util.concurrent.atomic.AtomicBoolean
  *
  *   1. 拿到微信主进程的 Application（只注入主进程，:push / :appbrand 不碰）
  *   2. GroupHook —— 会话列表的分组过滤（索引投影）+ 顶部标签栏
+ *   3. AntiRecall —— 防撤回：拦下撤回通知，把消息半透明留在原地
+ *
+ * 全模块不往 logcat 写任何东西 —— 少一个被宿主发现的口子。
  */
 class XposedEntry : IXposedHookLoadPackage {
 
@@ -44,12 +46,11 @@ class XposedEntry : IXposedHookLoadPackage {
             }
         }
 
-        var hooked = 0
         runCatching {
             Class.forName("android.app.LoadedApk", false, lpparam.classLoader)
                 .declaredMethods
                 .filter { it.name.startsWith("makeApplication") }
-                .forEach { if (runCatching { XposedBridge.hookMethod(it, appHook) }.isSuccess) hooked++ }
+                .forEach { runCatching { XposedBridge.hookMethod(it, appHook) } }
         }
         runCatching {
             XposedHelpers.findAndHookMethod(
@@ -58,9 +59,7 @@ class XposedEntry : IXposedHookLoadPackage {
                 Application::class.java,
                 appHook,
             )
-            hooked++
         }
-        if (hooked == 0) Log.w(TAG, "Application 入口全部 hook 失败，模块不生效")
     }
 
     /** 在微信主进程里拿到 Application 之后，把功能装起来（只会成功一次） */
@@ -68,13 +67,11 @@ class XposedEntry : IXposedHookLoadPackage {
         if (!started.compareAndSet(false, true)) return
         GroupStore.attach(app)
         GroupHook.install()
-        log("启动完成，当前分组 = ${GroupStore.current.title}")
+        // 防撤回：dex 扫描比较重，内部自己丢后台线程，不挡启动
+        AntiRecall.install(app, app.classLoader)
     }
 
-    private fun log(msg: String) = Log.i(TAG, msg)
-
     companion object {
-        private const val TAG = "WxGroup"
         private const val HOST = "com.tencent.mm"
     }
 }
