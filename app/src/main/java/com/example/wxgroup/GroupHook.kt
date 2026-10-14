@@ -63,6 +63,9 @@ object GroupHook {
     /** 可见项对应的原始索引；null = 当前不过滤 */
     @Volatile private var visible: IntArray? = null
 
+    /** 各分组的未读会话数（下标 = GroupKind.ordinal），驱动标签栏红点 */
+    @Volatile private var badges: IntArray? = null
+
     /** 我们自己触发的 notify 要忽略，否则会和 notify 钩子来回递归 */
     @Volatile private var selfNotify = false
 
@@ -211,35 +214,50 @@ object GroupHook {
         val g = getItem ?: return false
 
         val kind = GroupStore.current
+        val all = kind == GroupKind.ALL
         val raw = rawCount(a)
-        val next: IntArray? = when {
-            kind == GroupKind.ALL -> null
-            raw <= 0 -> IntArray(0)
-            else -> {
-                val buf = IntArray(raw)
-                var n = 0
-                bypass.set(true)
-                try {
-                    for (i in 0 until raw) {
-                        val item = try {
-                            g.invoke(a, i)
-                        } catch (t: Throwable) {
-                            null
+
+        // 「全部」不过滤，所以不用建映射；但红点统计仍要扫一遍
+        val buf = if (all) null else IntArray(raw)
+        var n = 0
+        val kinds = GroupKind.entries
+        val counts = IntArray(kinds.size)
+
+        if (raw > 0) {
+            bypass.set(true)
+            try {
+                for (i in 0 until raw) {
+                    val item = try {
+                        g.invoke(a, i)
+                    } catch (t: Throwable) {
+                        null
+                    } ?: continue
+
+                    // 每条会话只反射一次，过滤和红点共用这份 Facts
+                    val facts = ConvItem.factsOf(item)
+                    if (facts.cat == 0) continue   // 判定失败 / 折叠会话：具体分组都不收
+
+                    // 红点：这条会话带未读 -> 它所属的分组都亮一个
+                    if (facts.unread > 0) {
+                        for (ki in kinds.indices) {
+                            if (kinds[ki].matches(facts.cat, facts.unread)) counts[ki]++
                         }
-                        if (kind.matches(item)) buf[n++] = i
                     }
-                } finally {
-                    bypass.set(false)
+                    if (buf != null && kind.matches(facts.cat, facts.unread)) buf[n++] = i
                 }
-                buf.copyOf(n)
+            } finally {
+                bypass.set(false)
             }
         }
 
+        val next = buf?.copyOf(n)
         val old = visible
         visible = next
         selfNotify = true
         return try {
             (a as? BaseAdapter)?.notifyDataSetChanged()
+            badges = counts
+            bar?.setBadges(counts)
             true
         } catch (t: Throwable) {
             // 回滚，保证 getCount() 与 ListView 的 mItemCount 始终一致
@@ -306,6 +324,8 @@ object GroupHook {
         lv.addHeaderView(tabs)
         bar = tabs
         tabs.rebuild()
+        // 红点可能比标签栏先算出来，补上
+        badges?.let { tabs.setBadges(it) }
         log("已接管会话列表（${lv.javaClass.simpleName}）")
     }
 

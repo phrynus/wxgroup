@@ -3,7 +3,12 @@ package com.example.wxgroup
 /**
  * 分组定义 + 匹配规则。
  *
- * 标签栏顺序 = 枚举顺序：`未读 / 群聊 / 好友 / 其他 / 全部`，默认选中「未读」。
+ * 标签栏顺序 = 枚举顺序：`未读 / 群聊 / 好友 / 全部`，默认选中「未读」。
+ *
+ * 「好友」= 好友私聊 + 微信自带官方号 / 系统号（文件传输助手、微信团队…），
+ * 但**不含公众号 / 服务号** —— 那两类只会在「全部」里出现。
+ *
+ * 标签栏红点：每个分组只要还有未读会话，就在标签文字右上角亮一个红点。
  *
  * 判定规则参考 WAuxv 的聊天分组 SQL，等价改写成对会话对象的字段判断。
  * 为什么不用改写 SQL 那套：微信收到新消息时是**直接在内存列表里插入会话**，
@@ -18,38 +23,34 @@ enum class GroupKind(val key: String, val title: String) {
     /** 群聊：`@chatroom`（普通群）或 `@im.chatroom`（开放平台群） */
     GROUP_CHAT("group", "群聊"),
 
-    /** 好友私聊 */
+    /** 好友私聊 + 微信自带官方号 / 系统号（不含公众号 / 服务号） */
     FRIEND("friend", "好友"),
-
-    /** 其他：既不是群聊也不是好友 —— 公众号 / 服务号 / 系统号 / 开放平台号 */
-    OTHER("other", "其他"),
 
     /** 全部：不过滤 */
     ALL("all", "全部");
 
-    /** 这条会话属于当前分组吗？ */
+    /** 这条会话属于当前分组吗？（单条查询用；批量扫描请用下面的重载） */
     fun matches(item: Any?): Boolean {
         if (this == ALL) return true
         if (item == null) return false
 
-        val plan = ConvItem.planOf(item.javaClass)
-        val username = ConvItem.stringOf(item, plan.username) ?: return false
+        val facts = ConvItem.factsOf(item)
+        // cat == 0 表示判定失败（字段对不上 / 折叠会话），具体分组都不收
+        return facts.cat != 0 && matches(facts.cat, facts.unread)
+    }
 
-        // 微信折叠起来的会话不归任何分组
-        if (ConvItem.stringOf(item, plan.parentRef) == ConvItem.HIDDEN_PARENT) return false
+    /**
+     * 用已经取好的判定要素判断，供列表扫描 / 红点统计共用 ——
+     * 一条会话只反射一次，各个分组复用同一份 Facts。
+     */
+    internal fun matches(cat: Int, unread: Int): Boolean = when (this) {
+        // 未读：有未读，且不是公众号 / 服务号 / 系统号
+        UNREAD -> unread > 0 && (cat and ConvItem.CAT_OFFICIAL_OR_SYSTEM) == 0
 
-        // 分类结果按 username 缓存，所以这里通常只是一次 map 查询
-        val cat = ConvItem.categoryOf(item, plan, username)
-
-        return when (this) {
-            UNREAD -> ConvItem.sumIntOf(item, plan.unread) > 0 &&
-                (cat and ConvItem.CAT_OFFICIAL_OR_SYSTEM) == 0
-
-            GROUP_CHAT -> (cat and ConvItem.CAT_CHATROOM) != 0
-            FRIEND -> (cat and ConvItem.CAT_FRIEND) != 0
-            OTHER -> (cat and ConvItem.CAT_OTHER) != 0
-            ALL -> true
-        }
+        GROUP_CHAT -> (cat and ConvItem.CAT_CHATROOM) != 0
+        // 好友：真好友 + 微信自带官方号 / 系统号
+        FRIEND -> (cat and (ConvItem.CAT_FRIEND or ConvItem.CAT_SYSTEM)) != 0
+        ALL -> true
     }
 
     companion object {

@@ -47,7 +47,7 @@ object ConvItem {
     private const val ATTR_OFFICIAL_2 = 8388608                 // attrflag 0x800000
     private const val ATTR_OFFICIAL_3 = 16777216                // attrflag 0x1000000
 
-    /** 微信内置功能号 / 系统号：既不是好友也不是正常会话，统一归「其他」 */
+    /** 微信内置功能号 / 系统号：没有真实联系人，归到「好友」分组里展示 */
     private val SYSTEM_ACCOUNTS = setOf(
         "officialaccounts", "service_officialaccounts",
         "appbrandcustomerservicemsg", "opencustomerservicemsg",
@@ -60,11 +60,24 @@ object ConvItem {
     )
 
     // ------------------------------------------------------------ 分类常量
+    // 一条会话只会属于其中一种，所以都是单一位标记；
+    // CAT_OFFICIAL_OR_SYSTEM 只是「公众号 / 服务号 / 微信官方号」的合并掩码，
+    // 用于未读分组把这几类排除掉。
 
+    /** 群聊 */
     const val CAT_CHATROOM = 1
+
+    /** 好友私聊 */
     const val CAT_FRIEND = 2
-    const val CAT_OTHER = 4
-    const val CAT_OFFICIAL_OR_SYSTEM = 8
+
+    /** 微信自带的官方号 / 系统号：文件传输助手、微信团队、服务通知、微信支付… */
+    const val CAT_SYSTEM = 4
+
+    /** 公众号 / 服务号 / 开放平台号 */
+    const val CAT_OFFICIAL = 8
+
+    /** 公众号 / 服务号 / 微信官方号的合并掩码（未读分组要排除它们） */
+    const val CAT_OFFICIAL_OR_SYSTEM = CAT_SYSTEM or CAT_OFFICIAL
 
     /** 分类缓存上限，超了就整体清空（换账号 / 聊天室很多时兜底） */
     private const val CAT_CACHE_MAX = 8192
@@ -155,6 +168,28 @@ object ConvItem {
         return sum
     }
 
+    // ------------------------------------------------------------ 分组判定要素
+
+    /**
+     * 一条会话参与分组判定所需的全部信息，一次反射取齐。
+     * 列表过滤和标签栏红点都要用，所以合并成一次取，别把同一条会话反射两遍。
+     */
+    internal class Facts(val cat: Int, val unread: Int)
+
+    /** 判定失败（字段对不上 / 折叠会话）：任何具体分组都不收，「全部」除外 */
+    private val NO_FACTS = Facts(0, 0)
+
+    /**
+     * 取一条会话的判定要素。
+     * 折叠会话（parentRef = hidden_conv_parent）直接返回 [NO_FACTS]，因为它不归任何具体分组。
+     */
+    internal fun factsOf(item: Any): Facts {
+        val plan = planOf(item.javaClass)
+        val username = stringOf(item, plan.username) ?: return NO_FACTS
+        if (stringOf(item, plan.parentRef) == HIDDEN_PARENT) return NO_FACTS
+        return Facts(categoryOf(item, plan, username), sumIntOf(item, plan.unread))
+    }
+
     // ------------------------------------------------------------ 分类（带缓存）
 
     /**
@@ -169,22 +204,27 @@ object ConvItem {
         val af = intOf(item, plan.attrFlag)
 
         val chatroom = isChatRoom(username)
-        val official = isOfficialName(username) || isOfficialLike(vf, af)
+        // 顺序要紧：先按 ID 认公众号 / 服务号容器，再认微信自带官方号，
+        // 最后才看标志位 —— 有些系统号也带着官方标志位，不能因此被当成公众号。
+        val officialName = isOfficialName(username)
         val system = isSystemAccount(username)
 
         val cat = when {
             chatroom -> CAT_CHATROOM
-            // 公众号 / 服务号 / 微信支付 / 系统号 -> 其他
-            official || system -> CAT_OTHER
+            // 公众号 / 服务号（含容器 officialaccounts / service_officialaccounts）
+            officialName -> CAT_OFFICIAL
+            // 微信自带官方号 / 系统号：归到「好友」分组展示
+            system -> CAT_SYSTEM
+            // 标志位兜底：ID 认不出但带着官方位的，仍当作公众号 / 服务号
+            isOfficialLike(vf, af) -> CAT_OFFICIAL
             // 开放平台号（形如 xxx@openim）不是好友
-            username.contains('@') && !username.endsWith("@micromsg.qq.com") -> CAT_OTHER
+            username.contains('@') && !username.endsWith("@micromsg.qq.com") -> CAT_OFFICIAL
             else -> CAT_FRIEND
         }
 
-        val flag = if (official || system) cat or CAT_OFFICIAL_OR_SYSTEM else cat
         if (CATEGORY.size >= CAT_CACHE_MAX) CATEGORY.clear()
-        CATEGORY[username] = flag
-        return flag
+        CATEGORY[username] = cat
+        return cat
     }
 
     // ------------------------------------------------------------ 判定规则

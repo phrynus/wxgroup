@@ -3,8 +3,12 @@
 LSPosed / Xposed 模块。在微信会话列表顶部加一条分组标签栏：
 
 ```
-未读   群聊   好友   其他   全部
+未读   群聊   好友   全部
 ```
+
+四个标签**等宽平分**整行，选中项下方有一条滑动指示条。
+
+每个分组只要还有未读会话，它的标签文字右上角就会亮一个红点。
 
 只做这一件事，不依赖 DexKit，也不需要任何 native 库。
 
@@ -54,13 +58,30 @@ getItem(1)  →  取原始第 2 项            （点击也要翻译，否则打
 
 所有分组都排除 `parentRef = hidden_conv_parent`（微信折叠起来的会话）。
 
-| 分组 | 判定 |
-| --- | --- |
-| 未读 | `unReadCount + unReadMuteCount > 0`，且不是公众号 / 系统号 |
-| 群聊 | ID 以 `@chatroom` 或 `@im.chatroom` 结尾 |
-| 好友 | 不是群聊、不是公众号、不是系统号，且 ID 不含 `@`（`@micromsg.qq.com` 除外） |
-| 其他 | 以上都不是：公众号、服务号、微信支付、系统号、企业微信外部联系人 |
-| 全部 | 不过滤 |
+| 分组 | 判定                                                                                           |
+| ---- | ---------------------------------------------------------------------------------------------- |
+| 未读 | `unReadCount + unReadMuteCount > 0`，且不是公众号 / 服务号 / 系统号                            |
+| 群聊 | ID 以 `@chatroom` 或 `@im.chatroom` 结尾                                                       |
+| 好友 | 真好友 + 微信自带官方号 / 系统号（文件传输助手、微信团队、服务通知…），**不含公众号 / 服务号** |
+| 全部 | 不过滤（公众号 / 服务号 只在这里出现）                                                         |
+
+各类只占一个位标记：`CAT_CHATROOM` / `CAT_FRIEND` / `CAT_SYSTEM` / `CAT_OFFICIAL`，
+分类顺序是「群聊 → 公众号（含容器 `officialaccounts`）→ 微信自带官方号 → 标志位 → 开放平台号 → 好友」，
+所以带着官方标志位的系统号不会因此被误判成公众号。
+
+### 未读红点
+
+`refresh()` 里扫一遍原始列表，每条会话只反射一次得到一个 `ConvItem.Facts`（分类 + 未读数），
+列表过滤和红点统计共用它：
+
+```
+Facts(cat, unread)
+  ├─ 过滤：当前分组 matches(cat, unread) -> 写进 visible 映射
+  └─ 红点：unread > 0 时，四个分组各自 matches(cat, unread) -> counts[ordinal]++
+```
+
+`counts` 交给 `TabsBar.setBadges()`，`> 0` 就把对应标签文字右上角的红点亮起来。
+注意「全部」也能亮 —— 它同样按「有没有未读会话」算。
 
 公众号 / 服务号同时按 **ID 特征**和**标志位**判定：
 
@@ -97,12 +118,12 @@ app/src/main/java/com/example/wxgroup/
 
 ## 编译
 
-| 项 | 值 |
-| --- | --- |
-| Gradle | 8.9 |
-| JDK | 17 |
-| AGP | 8.7.3 |
-| Kotlin | 2.1.0 |
+| 项                              | 值           |
+| ------------------------------- | ------------ |
+| Gradle                          | 8.9          |
+| JDK                             | 17           |
+| AGP                             | 8.7.3        |
+| Kotlin                          | 2.1.0        |
 | compileSdk / minSdk / targetSdk | 34 / 28 / 34 |
 
 ```powershell
@@ -143,12 +164,12 @@ adb install -r app-debug.apk
 
 ## 已知限制
 
-| 现象 | 原因 / 处理 |
-| --- | --- |
-| 没有「已接管会话列表」 | 本机微信可能用了 RecyclerView 版列表，本版本只支持 ListView |
-| 分组内容不对 | 字段名不匹配，把实际的 `field_xxx` 加进 `ConvItem` 的候选名数组 |
-| 点击会话打开错人 | 该版本不通过 `adapter.getItem()` 取数据，删掉 `GroupHook` 里 hook `getItem` 的那一行 |
-| 分类不准 | 在 `ConvItem.SYSTEM_ACCOUNTS` 里补 ID，或调整 `isOfficialName` |
+| 现象                   | 原因 / 处理                                                                          |
+| ---------------------- | ------------------------------------------------------------------------------------ |
+| 没有「已接管会话列表」 | 本机微信可能用了 RecyclerView 版列表，本版本只支持 ListView                          |
+| 分组内容不对           | 字段名不匹配，把实际的 `field_xxx` 加进 `ConvItem` 的候选名数组                      |
+| 点击会话打开错人       | 该版本不通过 `adapter.getItem()` 取数据，删掉 `GroupHook` 里 hook `getItem` 的那一行 |
+| 分类不准               | 在 `ConvItem.SYSTEM_ACCOUNTS` 里补 ID，或调整 `isOfficialName`                       |
 
 ---
 
