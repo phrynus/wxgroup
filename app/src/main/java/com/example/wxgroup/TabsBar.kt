@@ -20,8 +20,6 @@ import android.widget.TextView
  *
  * 标签**等宽平分**整行（不横向滚动），指示条用位移动画滑到选中的那个下面。
  *
- * 某个分组只要还有未读会话，它的标签文字右上角就会亮一个红点（见 [setBadges]）。
- *
  *   品牌绿（浅色） #07C160      微信按钮 / 强调色
  *   品牌绿（深色） #3EB575
  *   次要文字灰     #888888 / #B2B2B2
@@ -35,9 +33,6 @@ class TabsBar(context: Context) : LinearLayout(context) {
     private val row = LinearLayout(context)
     private val indicator = View(context)
     private val tabs = ArrayList<View>(GroupKind.entries.size)
-
-    /** 各分组的未读数（下标 = GroupKind.ordinal），用来决定红点显不显示 */
-    private var badges: IntArray? = null
 
     /** 上次对齐的分组下标，用来判断这次要不要走滑动动画 */
     private var lastSyncedIndex = -1
@@ -60,11 +55,6 @@ class TabsBar(context: Context) : LinearLayout(context) {
 
     private val colorDivider: Int
         get() = if (dark) 0xFF2E2E2E.toInt() else 0xFFE5E5E5.toInt()
-
-    /** 未读红点：微信自己的红，深浅色都用同一个 */
-    private val colorDot: Int get() = 0xFFFA5151.toInt()
-
-    private val dotSize: Int get() = dp(7)
 
     init {
         orientation = VERTICAL
@@ -123,18 +113,7 @@ class TabsBar(context: Context) : LinearLayout(context) {
             tabs.add(tab)
             row.addView(tab)
         }
-        // 标签是新建的，红点要重新贴上去
-        badges?.let { applyBadges(it) }
         requestLayout()
-    }
-
-    /**
-     * 更新各分组的未读红点（下标 = GroupKind.ordinal，>0 就亮）。
-     * 只在主线程调用；值会存下来，标签重建时自动补上。
-     */
-    fun setBadges(counts: IntArray) {
-        badges = counts
-        applyBadges(counts)
     }
 
     override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
@@ -165,60 +144,17 @@ class TabsBar(context: Context) : LinearLayout(context) {
             setTextColor(if (selected) colorSelected else colorNormal)
             gravity = Gravity.CENTER
             setPadding(dp(4), dp(8), dp(4), dp(8))
-        }
-
-        // 文字外面再包一个「贴着文字大小」的盒子，红点才能贴在文字的右上角，
-        // 而不是贴在整格（等宽格子比文字宽得多）的右上角
-        val box = FrameLayout(context)
-        box.addView(
-            label,
-            FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-            ),
-        )
-        box.addView(
-            View(context).apply {
-                tag = DOT_TAG
-                background = GradientDrawable().apply {
-                    shape = GradientDrawable.OVAL
-                    setColor(colorDot)
-                }
-                visibility = GONE
-            },
-            FrameLayout.LayoutParams(dotSize, dotSize, Gravity.TOP or Gravity.END).apply {
-                topMargin = dp(6)
-            },
-        )
-
-        // 宽度 0 + weight 1：每个标签等宽平分整行；文字盒子在格子里居中
-        val cell = FrameLayout(context).apply {
+            // 宽度 0 + weight 1：每个标签等宽平分整行；文字居中
             layoutParams = LinearLayout.LayoutParams(
                 0,
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 1f,
             )
-            addView(
-                box,
-                FrameLayout.LayoutParams(
-                    FrameLayout.LayoutParams.WRAP_CONTENT,
-                    FrameLayout.LayoutParams.WRAP_CONTENT,
-                    Gravity.CENTER,
-                ),
-            )
             setOnClickListener {
                 if (GroupStore.current != kind) onSelect?.invoke(kind)
             }
         }
-        return cell
-    }
-
-    /** 按未读数把每个标签的红点亮 / 灭 */
-    private fun applyBadges(counts: IntArray) {
-        for (i in tabs.indices) {
-            val dot = tabs[i].findViewWithTag<View>(DOT_TAG) ?: continue
-            dot.visibility = if (counts.getOrElse(i) { 0 } > 0) VISIBLE else GONE
-        }
+        return label
     }
 
     /** 把指示条移到选中标签的正下方居中 */
@@ -237,9 +173,4 @@ class TabsBar(context: Context) : LinearLayout(context) {
 
     private fun dp(value: Int): Int =
         (value * resources.displayMetrics.density + 0.5f).toInt()
-
-    private companion object {
-        /** 红点 View 的 tag，标签重建后靠它重新找到红点 */
-        const val DOT_TAG = "wxgroup_tab_dot"
-    }
 }

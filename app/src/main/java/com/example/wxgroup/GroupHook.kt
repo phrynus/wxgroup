@@ -2,7 +2,6 @@ package com.example.wxgroup
 
 import android.os.Handler
 import android.os.Looper
-import android.util.Log
 import android.view.View
 import android.widget.AbsListView
 import android.widget.BaseAdapter
@@ -41,7 +40,6 @@ import java.lang.reflect.Method
  */
 object GroupHook {
 
-    private const val TAG = "WxGroup"
     private const val TAB_TAG = "wxgroup_tabs"
 
     /** adapter 未初始化时 notify 会抛异常，最多重试几次 */
@@ -62,9 +60,6 @@ object GroupHook {
 
     /** 可见项对应的原始索引；null = 当前不过滤 */
     @Volatile private var visible: IntArray? = null
-
-    /** 各分组的未读会话数（下标 = GroupKind.ordinal），驱动标签栏红点 */
-    @Volatile private var badges: IntArray? = null
 
     /** 我们自己触发的 notify 要忽略，否则会和 notify 钩子来回递归 */
     @Volatile private var selfNotify = false
@@ -127,7 +122,7 @@ object GroupHook {
                 findMethod(cls, "notifyDataSetChanged", 0, null)
                     ?.let { XposedBridge.hookMethod(it, changedHook) }
             } catch (t: Throwable) {
-                Log.e(TAG, "hook 会话适配器失败", t)
+                // 静默：本模块不往 logcat 写任何东西
             }
         }
 
@@ -195,8 +190,6 @@ object GroupHook {
         }
         if (retries > 0) {
             main.postDelayed({ applyFilter(retries - 1, rebind) }, RETRY_DELAY_MS)
-        } else {
-            Log.w(TAG, "重算超时，本次跳过")
         }
     }
 
@@ -214,50 +207,40 @@ object GroupHook {
         val g = getItem ?: return false
 
         val kind = GroupStore.current
-        val all = kind == GroupKind.ALL
         val raw = rawCount(a)
 
-        // 「全部」不过滤，所以不用建映射；但红点统计仍要扫一遍
-        val buf = if (all) null else IntArray(raw)
-        var n = 0
-        val kinds = GroupKind.entries
-        val counts = IntArray(kinds.size)
+        // 「全部」就是不过滤，连扫都不用扫
+        val next: IntArray? = when {
+            kind == GroupKind.ALL -> null
+            raw <= 0 -> IntArray(0)
+            else -> {
+                val buf = IntArray(raw)
+                var n = 0
+                bypass.set(true)
+                try {
+                    for (i in 0 until raw) {
+                        val item = try {
+                            g.invoke(a, i)
+                        } catch (t: Throwable) {
+                            null
+                        } ?: continue
 
-        if (raw > 0) {
-            bypass.set(true)
-            try {
-                for (i in 0 until raw) {
-                    val item = try {
-                        g.invoke(a, i)
-                    } catch (t: Throwable) {
-                        null
-                    } ?: continue
-
-                    // 每条会话只反射一次，过滤和红点共用这份 Facts
-                    val facts = ConvItem.factsOf(item)
-                    if (facts.cat == 0) continue   // 判定失败 / 折叠会话：具体分组都不收
-
-                    // 红点：这条会话带未读 -> 它所属的分组都亮一个
-                    if (facts.unread > 0) {
-                        for (ki in kinds.indices) {
-                            if (kinds[ki].matches(facts.cat, facts.unread)) counts[ki]++
-                        }
+                        // 一条会话只反射一次（分类 + 未读数一次取齐）
+                        val facts = ConvItem.factsOf(item)
+                        if (facts.cat != 0 && kind.matches(facts.cat, facts.unread)) buf[n++] = i
                     }
-                    if (buf != null && kind.matches(facts.cat, facts.unread)) buf[n++] = i
+                } finally {
+                    bypass.set(false)
                 }
-            } finally {
-                bypass.set(false)
+                buf.copyOf(n)
             }
         }
 
-        val next = buf?.copyOf(n)
         val old = visible
         visible = next
         selfNotify = true
         return try {
             (a as? BaseAdapter)?.notifyDataSetChanged()
-            badges = counts
-            bar?.setBadges(counts)
             true
         } catch (t: Throwable) {
             // 回滚，保证 getCount() 与 ListView 的 mItemCount 始终一致
@@ -324,9 +307,6 @@ object GroupHook {
         lv.addHeaderView(tabs)
         bar = tabs
         tabs.rebuild()
-        // 红点可能比标签栏先算出来，补上
-        badges?.let { tabs.setBadges(it) }
-        log("已接管会话列表（${lv.javaClass.simpleName}）")
     }
 
     // ------------------------------------------------------------------ 预热
@@ -348,7 +328,7 @@ object GroupHook {
             } catch (t: Throwable) {
                 // 预热失败无所谓
             }
-        }, "WxGroupWarmup").apply { isDaemon = true }.start()
+        }).apply { isDaemon = true }.start()
     }
 
     // ------------------------------------------------------------------ 工具
@@ -373,6 +353,4 @@ object GroupHook {
         }
         return null
     }
-
-    private fun log(msg: String) = Log.i(TAG, msg)
 }
