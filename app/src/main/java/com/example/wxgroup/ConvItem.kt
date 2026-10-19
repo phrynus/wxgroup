@@ -42,12 +42,6 @@ object ConvItem {
     /** 微信折叠 / 隐藏会话的 parentRef 值，任何分组都不收 */
     const val HIDDEN_PARENT = "hidden_conv_parent"
 
-    /**
-     * 「折叠置顶聊天」的容器会话 ID。
-     * WeKit 会把它从数据库里删掉；本模块不写库，改在投影里排除（见 [PinnedFold]）。
-     */
-    const val FOLD_USERNAME = "message_fold"
-
     private const val VERIFY_OFFICIAL = 8                       // rcontact.verifyFlag & 8
     private const val ATTR_OFFICIAL_1 = 2097152                 // attrflag 0x200000
     private const val ATTR_OFFICIAL_2 = 8388608                 // attrflag 0x800000
@@ -203,8 +197,6 @@ object ConvItem {
     internal fun factsOf(item: Any): Facts {
         val plan = planOf(item.javaClass)
         val username = stringOf(item, plan.username) ?: return NO_FACTS
-        // 「折叠置顶聊天」的容器行：等价于 WeKit 的「清理残留折叠条目」，但不碰数据库
-        if (username == FOLD_USERNAME) return NO_FACTS
         if (stringOf(item, plan.parentRef) == HIDDEN_PARENT) return NO_FACTS
         return Facts(
             categoryOf(item, plan, username),

@@ -1,13 +1,11 @@
 # 微信会话分组
 
-LSPosed / Xposed 模块，作用在微信（`com.tencent.mm`）的会话列表上，包含三个独立功能：
+LSPosed / Xposed 模块，作用在微信（`com.tencent.mm`）的会话列表上，包含两个独立功能：
 
 1. **会话分组** —— 在会话列表顶部注入一条等宽标签栏 `未读 / 群聊 / 好友 / 全部`。
    切换分组只改变「显示哪些会话」，微信自身的数据一个字节都不动。
 2. **撤回消息保留** —— 拦下撤回通知，让被撤回的消息内容留在本地并半透明显示，
    而不是被替换成「xxx 撤回了一条消息」。
-3. **禁用置顶聊天折叠** —— 关掉首页「折叠置顶聊天」入口，让置顶会话始终展开
-   （移植自 WeKit 的 `DisablePinnedChatsCollapsing`，见下文）。
 
 不依赖 DexKit，也没有 native 代码；唯一的编译期依赖是 Xposed API，且为 `compileOnly`，不会打进 APK。
 
@@ -137,28 +135,6 @@ RecallStore: SharedPreferences<Set<String>> 存 svrId，上限 4000 条
 
 ---
 
-## 禁用置顶聊天折叠
-
-移植自 WeKit 的 `DisablePinnedChatsCollapsing`。微信在置顶会话多到一屏放不下时，
-会在首页插一个「折叠置顶聊天」入口，把置顶会话全收进去。本特性把它关掉，
-让置顶会话**始终展开**。做法和 WeKit 一样 —— **三条路全堵死**（均按字符串反查）：
-
-| 目标方法                                  | 反查用的字符串常量                | 处理                                      |
-| ----------------------------------------- | --------------------------------- | ----------------------------------------- |
-| `FolderHelper.addCollapseChatItem`        | `fold item exist`                 | before：`result = null`                   |
-| `FolderHelper.checkIfShowFoldItem`        | `checkIfShowFoldItem, ifShow:`    | before / after：`false`                   |
-| `RecyclerFolderHelper.shouldShowFoldItem` | `performFoldItemClick: not ready` | 同类里按 `(int) -> bool` 找方法后 `false` |
-
-> 第 3 条的那段日志未必就在 `shouldShowFoldItem` 本身，所以先在「含有这段
-> 日志的类」里定位，再按签名 `(int) -> boolean` 找到真正的目标方法。
-
-与 WeKit 的一处有意差异：WeKit 最后会用一条 `DELETE` 把数据库里残留的
-`message_fold` 会话行清掉（它自带 DB API）。本模块**不写微信的数据**，
-改为在 `ConvItem` 的会话投影里把 `message_fold` 排除 —— 效果等价（残留的
-折叠条目不再出现在分组列表里），但一个字节都不动数据库。
-
----
-
 ## 抗混淆
 
 微信的类名每个版本都变（`iq5.a1`、`tn5.g`…），所以代码里**不看类名**：
@@ -168,7 +144,6 @@ RecallStore: SharedPreferences<Set<String>> 存 svrId，上限 4000 条
   `field_verifyFlag` / `field_attrflag` / `field_parentRef`
 - 消息识别靠 **`field_talker` / `field_msgSvrId` / `field_isSend`**
 - 撤回消息保留要钩的两个方法是**按字符串常量反查**的（见下），同样不依赖类名
-- 禁用置顶聊天折叠要钩的方法也是**按字符串常量反查**的（见下）
 - 取字段的反射方案按类缓存，分类结果按 username 缓存
 
 ### 按字符串反查方法（`DexScan`）
@@ -181,9 +156,6 @@ RecallStore: SharedPreferences<Set<String>> 存 svrId，上限 4000 条
 | ---------------- | -------------------------------------------- | ------------------------------------- |
 | XmlParser 类     | `MicroMsg.SDK.XmlParser`                     | `com.tencent.mm.sdk.platformtools.da` |
 | 聊天条目绑定方法 | `MicroMsg.MvvmChattingItem` + `[onBindView]` | `tn5.g#h`                             |
-| 折叠项添加方法   | `fold item exist`                            | —                                     |
-| 折叠项判断方法   | `checkIfShowFoldItem, ifShow:`               | —                                     |
-| MVVM 折叠项判断  | `performFoldItemClick: not ready`            | —                                     |
 
 `DexScan` 是个**不依赖 DexKit 的迷你 dex 扫描器**（约 300 行）：
 
@@ -207,7 +179,6 @@ app/src/main/java/com/example/wxgroup/
 ├── GroupModel.kt    分组定义、匹配规则、选中项持久化
 ├── ConvItem.kt      ★ 抗混淆：按字段名定位会话对象
 ├── AntiRecall.kt    ★ 撤回消息保留：XmlParser 拦截 + 半透明上色
-├── PinnedFold.kt    ★ 禁用置顶聊天折叠（移植自 WeKit）
 ├── DexScan.kt       ★ 迷你 dex 扫描器：按字符串常量反查类和方法
 ├── RecallStore.kt   被撤回消息的账本（svrId 集合）
 └── MsgInfo.kt       抗混淆：按字段名从绑定参数里找出消息对象
@@ -282,14 +253,14 @@ adb install -r app/build/outputs/apk/release/app-release.apk
 
 ## 已知限制
 
-| 现象                      | 原因 / 处理                                                                |
-| ------------------------- | -------------------------------------------------------------------------- |
-| 没有「已接管会话列表」    | 本机微信可能用了 RecyclerView 版列表，本版本只支持 ListView                |
-| 分组内容不对              | 字段名不匹配，把实际的 `field_xxx` 加进 `ConvItem` 的候选名数组            |
-| 点击会话打开错人          | 该版本不通过 `adapter.getItem()` 取数据，删掉 `GroupHook` 里 hook 它的那行 |
-| 分类不准                  | 在 `ConvItem.SYSTEM_ACCOUNTS` 里补 ID，或调整 `isOfficialName`             |
-| 撤回拦不住 / 拦住了没变灰 | 反查的字符串或反射签名变了；临时把 `AntiRecall` 里的日志加回来定位         |
-| 该变灰的没变灰            | 消息对象没有 `field_msgSvrId`，把候选字段名补进 `MsgInfo`                  |
+| 现象                      | 原因 / 处理                                                                       |
+| ------------------------- | --------------------------------------------------------------------------------- |
+| 没有「已接管会话列表」    | 本机微信可能用了 RecyclerView 版列表，本版本只支持 ListView                       |
+| 分组内容不对              | 字段名不匹配，把实际的 `field_xxx` 加进 `ConvItem` 的候选名数组                   |
+| 点击会话打开错人          | 该版本不通过 `adapter.getItem()` 取数据，删掉 `GroupHook` 里 hook 它的那行        |
+| 分类不准                  | 在 `ConvItem.SYSTEM_ACCOUNTS` 里补 ID，或调整 `isOfficialName`                    |
+| 撤回拦不住 / 拦住了没变灰 | 反查的字符串或反射签名变了；临时把 `AntiRecall` 里的日志加回来定位                |
+| 该变灰的没变灰            | 消息对象没有 `field_msgSvrId`，把候选字段名补进 `MsgInfo`                         |
 
 ---
 

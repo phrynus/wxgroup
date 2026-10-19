@@ -11,8 +11,8 @@ android {
         applicationId = "com.example.wxgroup"
         minSdk = 28
         targetSdk = 34
-        versionCode = 3
-        versionName = "1.2"
+        versionCode = 140
+        versionName = "1.4.0"
     }
 
     buildTypes {
