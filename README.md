@@ -221,8 +221,8 @@ gradle :app:assembleRelease   # 产物：app/build/outputs/apk/release/app-relea
 
 | 项   | 值                             |
 | ---- | ------------------------------ |
-| 版本 | 1.1（`versionCode = 2`）       |
-| 体积 | ~70 KB（debug 包 ~2.3 MB）     |
+| 版本 | 1.4.0（`versionCode = 140`）   |
+| 体积 | ~66 KB（debug 包 ~2.3 MB）     |
 | R8   | 开启 —— 收缩 + 混淆 + 资源压缩 |
 
 混淆会顺带把模块自己的类名改掉（入口 `XposedEntry` 由 keep 规则保住原名），
