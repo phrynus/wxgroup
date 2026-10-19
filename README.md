@@ -1,11 +1,13 @@
 # 微信会话分组
 
-LSPosed / Xposed 模块，作用在微信（`com.tencent.mm`）的会话列表上，包含两个独立功能：
+LSPosed / Xposed 模块，作用在微信（`com.tencent.mm`）的会话列表上，包含三个独立功能：
 
 1. **会话分组** —— 在会话列表顶部注入一条等宽标签栏 `未读 / 群聊 / 好友 / 全部`。
    切换分组只改变「显示哪些会话」，微信自身的数据一个字节都不动。
 2. **撤回消息保留** —— 拦下撤回通知，让被撤回的消息内容留在本地并半透明显示，
    而不是被替换成「xxx 撤回了一条消息」。
+3. **禁用置顶聊天折叠** —— 关掉首页「折叠置顶聊天」入口，让置顶会话始终展开
+   （移植自 WeKit 的 `DisablePinnedChatsCollapsing`，见下文）。
 
 不依赖 DexKit，也没有 native 代码；唯一的编译期依赖是 Xposed API，且为 `compileOnly`，不会打进 APK。
 
@@ -57,22 +59,22 @@ getItem(1)  →  取原始第 2 项            （点击也要翻译，否则打
 
 所有分组都排除 `parentRef = hidden_conv_parent`（微信折叠起来的会话）。
 
-| 分组 | 判定                                                                                           |
-| ---- | ---------------------------------------------------------------------------------------------- |
-| 未读 | `unReadCount + unReadMuteCount > 0`，且不是公众号 / 服务号 / 系统号                            |
-| 群聊 | ID 以 `@chatroom` 或 `@im.chatroom` 结尾                                                       |
-| 好友 | 真好友 + 微信自带官方号 / 系统号（文件传输助手、微信团队、服务通知…），**不含公众号 / 服务号** |
-| 全部 | 不过滤（公众号 / 服务号 只在这里出现）                                                         |
+| 分组 | 判定                                                                                                     |
+| ---- | -------------------------------------------------------------------------------------------------------- |
+| 未读 | `unReadCount + unReadMuteCount > 0`，且不是公众号 / 服务号 / 系统号（**文件传输助手、QQ 邮箱提醒除外**） |
+| 群聊 | ID 以 `@chatroom` 或 `@im.chatroom` 结尾                                                                 |
+| 好友 | 真好友 + 微信自带官方号 / 系统号（文件传输助手、微信团队、服务通知…），**不含公众号 / 服务号**           |
+| 全部 | 不过滤（公众号 / 服务号 只在这里出现）                                                                   |
 
 各类只占一个位标记：`CAT_CHATROOM` / `CAT_FRIEND` / `CAT_SYSTEM` / `CAT_OFFICIAL`，
 分类顺序是「群聊 → 公众号（含容器 `officialaccounts`）→ 微信自带官方号 → 标志位 → 开放平台号 → 好友」，
 所以带着官方标志位的系统号不会因此被误判成公众号。
 
-`refresh()` 里扫一遍原始列表，每条会话只反射一次得到一个 `ConvItem.Facts`（分类 + 未读数），
+`refresh()` 里扫一遍原始列表，每条会话只反射一次得到一个 `ConvItem.Facts`（分类 + 未读数 + 未读白名单标记），
 所以扫一趟就把过滤做完了：
 
 ```
-Facts(cat, unread) -> 当前分组 matches(cat, unread) -> 写进 visible 映射
+Facts(cat, unread, allowUnread) -> 当前分组 matches(facts) -> 写进 visible 映射
 ```
 
 > 选中「全部」时直接跳过扫描，`visible` 置 null，`getCount()` 原样返回。
@@ -135,6 +137,28 @@ RecallStore: SharedPreferences<Set<String>> 存 svrId，上限 4000 条
 
 ---
 
+## 禁用置顶聊天折叠
+
+移植自 WeKit 的 `DisablePinnedChatsCollapsing`。微信在置顶会话多到一屏放不下时，
+会在首页插一个「折叠置顶聊天」入口，把置顶会话全收进去。本特性把它关掉，
+让置顶会话**始终展开**。做法和 WeKit 一样 —— **三条路全堵死**（均按字符串反查）：
+
+| 目标方法                                  | 反查用的字符串常量                | 处理                                      |
+| ----------------------------------------- | --------------------------------- | ----------------------------------------- |
+| `FolderHelper.addCollapseChatItem`        | `fold item exist`                 | before：`result = null`                   |
+| `FolderHelper.checkIfShowFoldItem`        | `checkIfShowFoldItem, ifShow:`    | before / after：`false`                   |
+| `RecyclerFolderHelper.shouldShowFoldItem` | `performFoldItemClick: not ready` | 同类里按 `(int) -> bool` 找方法后 `false` |
+
+> 第 3 条的那段日志未必就在 `shouldShowFoldItem` 本身，所以先在「含有这段
+> 日志的类」里定位，再按签名 `(int) -> boolean` 找到真正的目标方法。
+
+与 WeKit 的一处有意差异：WeKit 最后会用一条 `DELETE` 把数据库里残留的
+`message_fold` 会话行清掉（它自带 DB API）。本模块**不写微信的数据**，
+改为在 `ConvItem` 的会话投影里把 `message_fold` 排除 —— 效果等价（残留的
+折叠条目不再出现在分组列表里），但一个字节都不动数据库。
+
+---
+
 ## 抗混淆
 
 微信的类名每个版本都变（`iq5.a1`、`tn5.g`…），所以代码里**不看类名**：
@@ -144,6 +168,7 @@ RecallStore: SharedPreferences<Set<String>> 存 svrId，上限 4000 条
   `field_verifyFlag` / `field_attrflag` / `field_parentRef`
 - 消息识别靠 **`field_talker` / `field_msgSvrId` / `field_isSend`**
 - 撤回消息保留要钩的两个方法是**按字符串常量反查**的（见下），同样不依赖类名
+- 禁用置顶聊天折叠要钩的方法也是**按字符串常量反查**的（见下）
 - 取字段的反射方案按类缓存，分类结果按 username 缓存
 
 ### 按字符串反查方法（`DexScan`）
@@ -156,6 +181,9 @@ RecallStore: SharedPreferences<Set<String>> 存 svrId，上限 4000 条
 | ---------------- | -------------------------------------------- | ------------------------------------- |
 | XmlParser 类     | `MicroMsg.SDK.XmlParser`                     | `com.tencent.mm.sdk.platformtools.da` |
 | 聊天条目绑定方法 | `MicroMsg.MvvmChattingItem` + `[onBindView]` | `tn5.g#h`                             |
+| 折叠项添加方法   | `fold item exist`                            | —                                     |
+| 折叠项判断方法   | `checkIfShowFoldItem, ifShow:`               | —                                     |
+| MVVM 折叠项判断  | `performFoldItemClick: not ready`            | —                                     |
 
 `DexScan` 是个**不依赖 DexKit 的迷你 dex 扫描器**（约 300 行）：
 
@@ -179,6 +207,7 @@ app/src/main/java/com/example/wxgroup/
 ├── GroupModel.kt    分组定义、匹配规则、选中项持久化
 ├── ConvItem.kt      ★ 抗混淆：按字段名定位会话对象
 ├── AntiRecall.kt    ★ 撤回消息保留：XmlParser 拦截 + 半透明上色
+├── PinnedFold.kt    ★ 禁用置顶聊天折叠（移植自 WeKit）
 ├── DexScan.kt       ★ 迷你 dex 扫描器：按字符串常量反查类和方法
 ├── RecallStore.kt   被撤回消息的账本（svrId 集合）
 └── MsgInfo.kt       抗混淆：按字段名从绑定参数里找出消息对象

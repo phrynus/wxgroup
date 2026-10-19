@@ -42,6 +42,12 @@ object ConvItem {
     /** 微信折叠 / 隐藏会话的 parentRef 值，任何分组都不收 */
     const val HIDDEN_PARENT = "hidden_conv_parent"
 
+    /**
+     * 「折叠置顶聊天」的容器会话 ID。
+     * WeKit 会把它从数据库里删掉；本模块不写库，改在投影里排除（见 [PinnedFold]）。
+     */
+    const val FOLD_USERNAME = "message_fold"
+
     private const val VERIFY_OFFICIAL = 8                       // rcontact.verifyFlag & 8
     private const val ATTR_OFFICIAL_1 = 2097152                 // attrflag 0x200000
     private const val ATTR_OFFICIAL_2 = 8388608                 // attrflag 0x800000
@@ -58,6 +64,15 @@ object ConvItem {
         "notifymessage", "appbrand_notify_message", "conversationboxservice",
         "schedule_message", "downloaderapp", "weixin", "exhelper", "weibo",
     )
+
+    /**
+     * 「未读」分组的系统号白名单。
+     *
+     * 「未读」默认把系统号 / 官方号全部排除，但文件传输助手（filehelper）和
+     * QQ 邮箱提醒（qqmail）有未读时用户希望能直接看到，所以单独放开这两个；
+     * 它们仍然算 CAT_SYSTEM，照旧出现在「好友」分组里。
+     */
+    private val UNREAD_ALLOWED_SYSTEM = setOf("filehelper", "qqmail")
 
     // ------------------------------------------------------------ 分类常量
     // 一条会话只会属于其中一种，所以都是单一位标记；
@@ -173,11 +188,13 @@ object ConvItem {
     /**
      * 一条会话参与分组判定所需的全部信息，一次反射取齐 ——
      * 扫描时一条会话只反射一次，分类和未读数一起拿到。
+     *
+     * @param allowUnread 是否命中「未读」白名单（文件传输助手 / QQ 邮箱提醒）
      */
-    internal class Facts(val cat: Int, val unread: Int)
+    internal class Facts(val cat: Int, val unread: Int, val allowUnread: Boolean)
 
     /** 判定失败（字段对不上 / 折叠会话）：任何具体分组都不收，「全部」除外 */
-    private val NO_FACTS = Facts(0, 0)
+    private val NO_FACTS = Facts(0, 0, false)
 
     /**
      * 取一条会话的判定要素。
@@ -186,8 +203,14 @@ object ConvItem {
     internal fun factsOf(item: Any): Facts {
         val plan = planOf(item.javaClass)
         val username = stringOf(item, plan.username) ?: return NO_FACTS
+        // 「折叠置顶聊天」的容器行：等价于 WeKit 的「清理残留折叠条目」，但不碰数据库
+        if (username == FOLD_USERNAME) return NO_FACTS
         if (stringOf(item, plan.parentRef) == HIDDEN_PARENT) return NO_FACTS
-        return Facts(categoryOf(item, plan, username), sumIntOf(item, plan.unread))
+        return Facts(
+            categoryOf(item, plan, username),
+            sumIntOf(item, plan.unread),
+            inSet(username, UNREAD_ALLOWED_SYSTEM),
+        )
     }
 
     // ------------------------------------------------------------ 分类（带缓存）
@@ -254,15 +277,18 @@ object ConvItem {
             (attrFlag and ATTR_OFFICIAL_2) != 0 ||
             (attrFlag and ATTR_OFFICIAL_3) != 0
 
+    /** 微信内置功能号 / 系统号 */
+    private fun isSystemAccount(username: String): Boolean = inSet(username, SYSTEM_ACCOUNTS)
+
     /**
-     * 微信内置功能号 / 系统号。
+     * 大小写无关的集合命中判断。
      * 正常会话 ID 都是小写（wxid_xxx / xxx@chatroom），所以先直接查，
-     * 只有真的含大写字母时才 lowercase —— 否则每次调用都会凭空造一个 String。
+     * 只有真的含大写字母时才 lowercase —— 否则热路径上每次都会凭空造一个 String。
      */
-    private fun isSystemAccount(username: String): Boolean {
-        if (username in SYSTEM_ACCOUNTS) return true
+    private fun inSet(username: String, set: Set<String>): Boolean {
+        if (username in set) return true
         for (c in username) {
-            if (c in 'A'..'Z') return username.lowercase() in SYSTEM_ACCOUNTS
+            if (c in 'A'..'Z') return username.lowercase() in set
         }
         return false
     }

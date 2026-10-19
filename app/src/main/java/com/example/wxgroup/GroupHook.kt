@@ -227,7 +227,7 @@ object GroupHook {
 
                         // 一条会话只反射一次（分类 + 未读数一次取齐）
                         val facts = ConvItem.factsOf(item)
-                        if (facts.cat != 0 && kind.matches(facts.cat, facts.unread)) buf[n++] = i
+                        if (facts.cat != 0 && kind.matches(facts)) buf[n++] = i
                     }
                 } finally {
                     bypass.set(false)

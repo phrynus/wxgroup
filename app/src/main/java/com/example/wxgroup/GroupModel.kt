@@ -15,7 +15,7 @@ package com.example.wxgroup
  */
 enum class GroupKind(val key: String, val title: String) {
 
-    /** 未读（默认）：有未读，且不是公众号 / 系统号 */
+    /** 未读（默认）：有未读，且不是公众号 / 系统号（文件传输助手 / QQ 邮箱提醒例外） */
     UNREAD("unread", "未读"),
 
     /** 群聊：`@chatroom`（普通群）或 `@im.chatroom`（开放平台群） */
@@ -34,20 +34,22 @@ enum class GroupKind(val key: String, val title: String) {
 
         val facts = ConvItem.factsOf(item)
         // cat == 0 表示判定失败（字段对不上 / 折叠会话），具体分组都不收
-        return facts.cat != 0 && matches(facts.cat, facts.unread)
+        return facts.cat != 0 && matches(facts)
     }
 
     /**
      * 用已经取好的判定要素判断 —— 扫描时一条会话只反射一次，
      * 各个分组复用同一份 [ConvItem.Facts]。
      */
-    internal fun matches(cat: Int, unread: Int): Boolean = when (this) {
-        // 未读：有未读，且不是公众号 / 服务号 / 系统号
-        UNREAD -> unread > 0 && (cat and ConvItem.CAT_OFFICIAL_OR_SYSTEM) == 0
+    internal fun matches(f: ConvItem.Facts): Boolean = when (this) {
+        // 未读：有未读，且不是公众号 / 服务号 / 系统号；
+        // 白名单里的系统号（文件传输助手、QQ 邮箱提醒）例外收下
+        UNREAD -> f.unread > 0 &&
+            ((f.cat and ConvItem.CAT_OFFICIAL_OR_SYSTEM) == 0 || f.allowUnread)
 
-        GROUP_CHAT -> (cat and ConvItem.CAT_CHATROOM) != 0
+        GROUP_CHAT -> (f.cat and ConvItem.CAT_CHATROOM) != 0
         // 好友：真好友 + 微信自带官方号 / 系统号
-        FRIEND -> (cat and (ConvItem.CAT_FRIEND or ConvItem.CAT_SYSTEM)) != 0
+        FRIEND -> (f.cat and (ConvItem.CAT_FRIEND or ConvItem.CAT_SYSTEM)) != 0
         ALL -> true
     }
 

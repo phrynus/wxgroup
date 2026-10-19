@@ -65,10 +65,13 @@ class XposedEntry : IXposedHookLoadPackage {
     /** 在微信主进程里拿到 Application 之后，把功能装起来（只会成功一次） */
     private fun start(app: Application) {
         if (!started.compareAndSet(false, true)) return
+        // 聊天分组
         GroupStore.attach(app)
         GroupHook.install()
         // 防撤回：dex 扫描比较重，内部自己丢后台线程，不挡启动
         AntiRecall.install(app, app.classLoader)
+        // 禁用置顶聊天折叠：同样是按字符串反查 + 后台扫描
+        PinnedFold.install(app, app.classLoader)
     }
 
     companion object {
